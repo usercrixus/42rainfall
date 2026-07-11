@@ -35,17 +35,7 @@ addresses (`0x0804xxxx`).
 
 Before returning, `main` calls `strdup(s)`, which copies the input buffer to
 the heap and returns the heap pointer in `EAX`. The binary has no NX
-protection, so shellcode placed in that heap region will execute directly:
-
-```bash
-readelf -l level2 | grep STACK
-```
-
-Output:
-
-```text
-GNU_STACK      0x000000 0x00000000 0x00000000 0x00000 0x00000 RWE 0x10
-```
+protection, so shellcode placed in that heap region will execute directly.
 
 The strategy is to write shellcode at the start of the buffer so that
 `strdup` copies it to the heap, then overwrite the return address with the
