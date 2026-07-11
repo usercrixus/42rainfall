@@ -79,7 +79,7 @@ the first four bytes of our buffer.
 
 It appears as the twelfth value read by `printf`. The extra indirection through
 `p` adds two additional stack frames between `printf`'s arguments and `n`'s
-buffer, shifting the index from 4 (as in level3) to 12.
+buffer, shifting the index to 12.
 
 We can therefore access the first four bytes of our input with:
 
