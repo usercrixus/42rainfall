@@ -56,14 +56,20 @@ puts(s);
 The binary is owned by `bonus1` and has the SUID bit set. It therefore runs
 with `bonus1` privileges.
 
-`strncpy` does not null-terminate when the source exactly fills the 20-byte
-limit. Providing exactly 20 bytes leaves both `first` and `last` without a `\0`.
+`strncpy(dest, buf, 20)` only null-terminates `dest` when `buf` is shorter
+than 20 bytes. `p()` is called twice by `pp()`, filling the adjacent stack
+buffers `first[20]` and `last[20]` - sending exactly 20 bytes to each leaves
+both without a `\0`.
 
-`strcpy(dest, first)` reads past `first` into `last`, then through `pp()`'s
-saved registers until hitting a null byte, roughly 44 bytes into `dest`.
-`strcat(dest, last)` then seeks to that null and appends `last` the same way,
-adding another ~24 bytes. The combined ~68-byte write overflows the 42-byte
-`s[]` and corrupts `main()`'s saved return address.
+Without a terminator, `strcpy(dest, first)` doesn't stop after 20 bytes: it
+keeps reading past `first` and `last` until it stumbles on a stray `\0`
+further up the stack, writing everything it reads into `main()`'s 42-byte `s`
+buffer. `strcat(dest, last)` then does the same thing again from `last`.
+Together these two oversized writes overflow `s[]` and reach `main()`'s saved
+return address - the target of the exploit in section 5.
+
+So the payload only needs one thing from this bug: send exactly 20 bytes to
+both `p()` calls to keep the overflow going.
 
 ## 4. Find the offset
 
@@ -75,30 +81,38 @@ keeps addresses stable later, in section 5):
 (gdb) unset env LINES
 ```
 
-Section 3 shows the `strcat` pass is what reaches far enough to corrupt the
-return address, so place a cyclic pattern in the second input only (the first
-input can stay a harmless `A`×20), and let the program run to completion:
+`strcpy` and `strcat` each keep copying until they trip over a stray `\0`, so
+where the first pass (`strcpy`) stops isn't predictable - it depends on
+runtime stack garbage. But wherever it stops, `strcat` starts a second pass
+right after it, appending `last` again:
+
+```text
+Pass 1 - strcpy(dest, first), starting at s+0:
++----------------------+----------------------+---------------------------+
+| first (20 bytes)     | last (20 bytes)      | pp()'s saved regs/retaddr |
++----------------------+----------------------+---------------------------+
+                                               ^ stops at the first stray \0
+                                                 found somewhere in here
+
+Pass 2 - strcat(dest, last), appended right where pass 1 stopped (s+X):
++----------------------+---------------------------+
+| last (20 bytes)      | pp()'s saved regs/retaddr |
++----------------------+---------------------------+
+       [9]       [13]
+             ^ this lands on main()'s return address
+```
+
+So only the *second* `p()` input needs a cyclic pattern to find where it
+overwrites `main()`'s return address - the first can stay a harmless `A`x20:
 
 ```gdb
 (gdb) r < <(python -c 'print "A"*20'; python -c 'print "Aa0Aa1Aa2Aa3Aa4Aa5Aa"')
 ```
 
-GDB catches the SIGSEGV and shows `EIP = 0x41336141`. Stored in little-endian that is `Aa3A`, which
-begins at **byte 9** of the pattern. The return address therefore starts at
-**byte 9 of the second input** — that's the only number the exploit actually
-needs.
-
-Stack layout after `pp()` returns:
-
-```text
-s+0               s+20              s+44  s+45
-+------------------+------------------+----+------------------+----+
-| first (20 bytes) | last  (strcpy)   |ebx | last  (strcat)   |ebx |
-+------------------+------------------+----+------------------+----+
-                                           ^ strcat appends here
-                                                [9]       [13]
-                                                      ^ return addr at s+54
-```
+GDB catches the SIGSEGV and shows `EIP = 0x41336141`. Stored in little-endian
+that is `Aa3A`, which begins at **byte 9** of the pattern - matching the `[9]`
+mark above. The return address therefore starts at **byte 9 of the second
+input**, which is the only number the exploit actually needs.
 
 ## 5. Exploit the binary
 
